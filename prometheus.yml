@@ -1,0 +1,111 @@
+---
+- name: Install and configure Prometheus server
+  hosts: prometheus_server2
+  become: true
+  vars_files:
+    - config.yml
+
+  tasks:
+    # Ensure the /etc/prometheus directory exists
+    - name: Ensure the /etc/prometheus directory exists
+      ansible.builtin.file:
+        path: /etc/prometheus
+        state: directory
+        mode: '0755'
+
+    # Step 1: Install Prometheus on Debian (APT)
+    - name: Install Prometheus on Debian
+      ansible.builtin.apt:
+        update_cache: yes
+        name: prometheus
+        state: present
+      when: ansible_os_family == "Debian"
+
+    # Step 2: Install dependencies on CentOS
+    - name: Install dependencies on CentOS (wget)
+      ansible.builtin.yum:
+        name: wget
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    # Step 3: Download Prometheus binary (CentOS)
+    - name: Download Prometheus binary (CentOS)
+      ansible.builtin.get_url:
+        url: "https://github.com/prometheus/prometheus/releases/download/v2.53.1/prometheus-2.53.1.linux-amd64.tar.gz"
+        dest: /tmp/prometheus.tar.gz
+      when: ansible_os_family == "RedHat"
+
+    # Step 4: Extract Prometheus binary (CentOS)
+    - name: Extract Prometheus binary (CentOS)
+      ansible.builtin.unarchive:
+        src: /tmp/prometheus.tar.gz
+        dest: /usr/local/bin/
+        extra_opts: ["--strip-components=1"]
+        remote_src: yes
+      when: ansible_os_family == "RedHat"
+
+    # Step 5: Configure Prometheus to scrape all Node Exporters
+    - name: Configure Prometheus to scrape all Node Exporters
+      ansible.builtin.copy:
+        dest: /etc/prometheus/prometheus.yml
+        content: |
+          global:
+            scrape_interval: 15s
+          scrape_configs:
+            - job_name: "node_exporter"
+              static_configs:
+                - targets:
+                  {% for host in groups['all_node_exporter'] %}
+                    - "{{ host }}:9100"
+                  {% endfor %}
+
+    # Step 6: Create Prometheus systemd service (for CentOS)
+    - name: Create Prometheus systemd service (CentOS)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/prometheus.service
+        content: |
+          [Unit]
+          Description=Prometheus Monitoring
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          User=nobody
+          Group=nogroup
+          Type=simple
+          ExecStart=/usr/local/bin/prometheus \
+            --config.file /etc/prometheus/prometheus.yml \
+            --storage.tsdb.path /var/lib/prometheus \
+            --web.console.templates=/usr/local/bin/consoles \
+            --web.console.libraries=/usr/local/bin/console_libraries
+
+          [Install]
+          WantedBy=multi-user.target
+      when: ansible_os_family == "RedHat"
+
+    # Step 7: Reload systemd daemon
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: yes
+
+    # Step 8: Enable and start Prometheus service
+    - name: Enable and start Prometheus service
+      ansible.builtin.systemd:
+        name: prometheus
+        state: started
+        enabled: yes
+
+    # Step 9: Update MOTD
+    - name: Get current user for MOTD
+      ansible.builtin.command:
+        cmd: whoami
+      register: current_user
+
+    - name: Update MOTD with user info
+      ansible.builtin.copy:
+        dest: /etc/motd
+        content: |
+          Ansible Managed by {{ current_user.stdout }}
+        owner: root
+        group: root
+        mode: '0644'

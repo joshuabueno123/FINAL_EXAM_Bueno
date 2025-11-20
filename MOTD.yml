@@ -1,0 +1,12 @@
+---
+- name: Get current user
+  ansible.builtin.command: whoami
+  register: prometheus_server1
+
+- name: Update MOTD
+  ansible.builtin.copy:
+    dest: /etc/motd
+    content: "Ansible Managed by {{ current_user.stdout }}\n"
+    owner: root
+    group: root
+    mode: '0644'
